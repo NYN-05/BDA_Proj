@@ -199,7 +199,7 @@ export default function App() {
                 </div>
                 <div>
                   <p className="text-7xl font-extralight tracking-tighter text-white leading-none">
-                    {prediction.predicted_power.toLocaleString()}
+                    {typeof prediction.predicted_power === 'number' ? prediction.predicted_power.toLocaleString() : '—'}
                   </p>
                   <p className="text-sm text-white/40 font-light mt-3">
                     kW &nbsp;&middot;&nbsp; Hour of {prediction.date_hour}
