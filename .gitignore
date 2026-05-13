@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+ENV/
+env/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Project specific
+energy-consumption-prediction/output/
+energy-consumption-prediction/visualization/charts/
+energy-consumption-prediction/ml/saved_models/
+energy-consumption-prediction/dataset/
+energy-consumption-prediction/mongo_data/
+energy-consumption-prediction/ui/node_modules/
+energy-consumption-prediction/ui/dist/
+energy-consumption-prediction/ui/.vite/
+*.log
+*.tmp
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints/
+
+# Docker
+.dockerignore

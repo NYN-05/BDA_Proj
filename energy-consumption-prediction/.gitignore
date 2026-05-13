@@ -1,0 +1,65 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+*.egg-info/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+pip-wheel-metadata/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Environments
+.env
+.env.*
+.venv/
+venv/
+ENV/
+env/
+
+# Logs and temp files
+*.log
+*.tmp
+*.bak
+*.swp
+*.swo
+*.pid
+*.pid.*
+
+# IDEs and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Node / frontend
+node_modules/
+ui/node_modules/
+ui/dist/
+ui/.vite/
+ui/.parcel-cache/
+
+# Build and coverage
+dist/
+build/
+coverage/
+
+# Data outputs and artifacts
+output/
+visualization/charts/
+ml/saved_models/
+spark-warehouse/
+
+# Local datasets and generated data
+dataset/
+mongo_data/
+
+# Hadoop/Spark runtime artifacts
+hadoop/*.jar
+hadoop/*.log
+*.class
