@@ -1,5 +1,5 @@
 """
-Hadoop Runner - Integrates HDFS, MapReduce, Hive, MongoDB, and Spark MLlib
+Hadoop Runner - Integrates HDFS and MapReduce for preprocessing.
 """
 import os
 import subprocess
@@ -22,6 +22,7 @@ HADOOP_DATANODE = "datanode"
 HADOOP_RESOURCEMANAGER = "resourcemanager"
 HADOOP_NODEMANAGER = "nodemanager"
 HADOOP_HISTORYSERVER = "historyserver"
+HIVE_SERVER = "hive-server"
 
 
 def run_docker_compose(command):
@@ -74,19 +75,8 @@ def start_hadoop_cluster():
 
 
 def start_other_services():
-    LOGGER.info("Starting other services (Hive, Spark, MongoDB)...")
-    result = subprocess.run(
-        f"docker compose -f {PROJECT_ROOT / 'docker-compose.yml'} up -d",
-        shell=True,
-        capture_output=True,
-        text=True
-    )
-    if result.returncode == 0:
-        LOGGER.info("Services started successfully!")
-        time.sleep(20)
-        return True
-    LOGGER.error(f"Failed to start services: {result.stderr}")
-    return False
+    LOGGER.info("Skipping Docker service startup (MongoDB removed).")
+    return True
 
 
 def upload_to_hdfs():
@@ -187,125 +177,53 @@ def run_mapreduce():
     return False
 
 
-def setup_hive():
-    LOGGER.info("Setting up Hive...")
-    docker_exec(HADOOP_NAMENODE, "hdfs dfs -mkdir -p /user/hive/warehouse")
-    
-    subprocess.run(
-        f"docker compose -f {PROJECT_ROOT / 'docker-compose.yml'} up -d hive-metastore hive-server",
-        shell=True,
-        capture_output=True
+def run_hive_trend_analysis():
+    LOGGER.info("Running Hive trend analysis...")
+    if not is_container_running(HIVE_SERVER):
+        LOGGER.warning("Hive server container is not running. Skipping Hive analysis.")
+        return False
+
+    hive_create = (
+        "CREATE TABLE IF NOT EXISTS hourly_energy ("
+        "date_hour STRING, avg_power DOUBLE) "
+        "ROW FORMAT DELIMITED FIELDS TERMINATED BY ',' "
+        "STORED AS TEXTFILE "
+        "LOCATION '/user/hive/warehouse/hourly_energy'"
     )
-    time.sleep(20)
-    
-    create_table_sql = "CREATE TABLE IF NOT EXISTS hourly_energy (date_hour STRING, avg_power DOUBLE) ROW FORMAT DELIMITED FIELDS TERMINATED BY ',' STORED AS TEXTFILE LOCATION '/user/hive/warehouse/hourly_energy';"
-    result = docker_exec("hive-server", f"bash -lc 'hive -e \"{create_table_sql}\"'")
-    LOGGER.info(f"Hive create table: {result.stdout}")
-    
-    load_sql = "LOAD DATA INPATH '/output_energy/part-00000' INTO TABLE hourly_energy;"
-    docker_exec("hive-server", f"bash -lc 'hive -e \"{load_sql}\"'")
-    
-    query_sql = "SELECT date_hour, avg_power FROM hourly_energy ORDER BY date_hour LIMIT 10;"
-    result = docker_exec("hive-server", f"bash -lc 'hive -e \"{query_sql}\"'")
-    LOGGER.info(f"Hive query results:\n{result.stdout}")
-    return True
+    docker_exec(HADOOP_NAMENODE, "hdfs dfs -mkdir -p /user/hive/warehouse/hourly_energy")
+    docker_exec(HADOOP_NAMENODE, "hdfs dfs -rm -r -f /user/hive/warehouse/hourly_energy/*")
 
-
-def run_spark_mllib():
-    LOGGER.info("Running Spark MLlib for forecasting...")
-    spark_script = """
-from pyspark.sql import SparkSession
-from pyspark.ml.regression import LinearRegression
-from pyspark.ml.feature import VectorAssembler
-from pyspark.sql.functions import col, hour, dayofmonth, month
-
-spark = SparkSession.builder.appName("EnergyForecasting").master("spark://spark-master:7077").getOrCreate()
-
-data = spark.read.csv("hdfs://namenode:9000/output_energy/part-00000", header=False, schema="date_hour STRING, avg_power DOUBLE")
-data = data.withColumn("hour", hour(col("date_hour")))
-data = data.withColumn("day", dayofmonth(col("date_hour")))
-data = data.withColumn("month", month(col("date_hour")))
-
-assembler = VectorAssembler(inputCols=["hour", "day", "month"], outputCol="features")
-data = assembler.transform(data)
-
-train_data, test_data = data.randomSplit([0.8, 0.2])
-lr = LinearRegression(featuresCol="features", labelCol="avg_power")
-model = lr.fit(train_data)
-
-predictions = model.transform(test_data)
-predictions.select("date_hour", "avg_power", "prediction").show()
-
-model.save("hdfs://namenode:9000/spark_model")
-spark.stop()
-"""
-    with open(HADOOP_DIR / "spark_forecast.py", "w") as f:
-        f.write(spark_script)
-    
-    subprocess.run(
-        f"docker cp '{HADOOP_DIR}/spark_forecast.py' spark-master:/tmp/spark_forecast.py",
-        shell=True,
-        capture_output=True
-    )
-    
-    result = subprocess.run(
-        "docker exec spark-master spark-submit --master spark://spark-master:7077 /tmp/spark_forecast.py",
-        shell=True,
-        capture_output=True,
-        text=True
-    )
-    
-    LOGGER.info(f"Spark job output: {result.stdout[:500]}")
+    result = docker_exec(HIVE_SERVER, f"bash -lc 'hive -e \"{hive_create}\"'")
     if result.returncode != 0:
-        LOGGER.error(f"Spark job failed: {result.stderr}")
-    return result.returncode == 0
+        LOGGER.error("Hive create table failed: %s", result.stderr)
+        return False
 
+    load_sql = "LOAD DATA INPATH '/output_energy/part-00000' OVERWRITE INTO TABLE hourly_energy;"
+    result = docker_exec(HIVE_SERVER, f"bash -lc 'hive -e \"{load_sql}\"'")
+    if result.returncode != 0:
+        LOGGER.error("Hive load failed: %s", result.stderr)
+        return False
 
-def store_in_mongodb():
-    LOGGER.info("Storing predictions in MongoDB...")
-    mongo_script = """
-from pymongo import MongoClient
-import csv
-import os
-
-client = MongoClient('mongodb://mongo:27017/')
-db = client['energy_predictions']
-
-predictions = []
-pred_path = '/workspace/output/next_month_prediction.csv'
-if os.path.exists(pred_path):
-    with open(pred_path, 'r') as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            predictions.append(row)
-    
-    if predictions:
-        db.predictions.insert_many(predictions)
-        print(f"Inserted {len(predictions)} predictions into MongoDB")
-else:
-    db.predictions.insert_one({"message": "Sample prediction data", "status": "processed"})
-    print("Inserted sample data into MongoDB")
-
-client.close()
-"""
-    with open(HADOOP_DIR / "mongo_store.py", "w") as f:
-        f.write(mongo_script)
-    
-    subprocess.run(
-        f"docker cp '{HADOOP_DIR}/mongo_store.py' mongo:/tmp/mongo_store.py",
-        shell=True,
-        capture_output=True
+    query_sql = (
+        "SELECT substr(date_hour, 1, 10) AS day, "
+        "avg(avg_power) AS avg_power "
+        "FROM hourly_energy "
+        "GROUP BY substr(date_hour, 1, 10) "
+        "ORDER BY day LIMIT 10;"
     )
-    
-    result = subprocess.run(
-        "docker exec mongo python3 /tmp/mongo_store.py",
-        shell=True,
-        capture_output=True,
-        text=True
-    )
-    
-    LOGGER.info(f"MongoDB storage result: {result.stdout}")
+    result = docker_exec(HIVE_SERVER, f"bash -lc 'hive -e \"{query_sql}\"'")
+    if result.returncode != 0:
+        LOGGER.error("Hive query failed: %s", result.stderr)
+        return False
+
+    output_path = OUTPUT_DIR / "hive_daily_avg.csv"
+    with output_path.open("w", encoding="utf-8") as handle:
+        handle.write("day,avg_power\n")
+        handle.write(result.stdout.strip() + "\n")
+    LOGGER.info("Hive daily averages saved to %s", output_path)
     return True
+
+
 
 
 def web_analytics():
@@ -342,10 +260,9 @@ def main():
     if not run_mapreduce():
         LOGGER.error("Failed to run MapReduce")
         return
+
+    run_hive_trend_analysis()
     
-    setup_hive()
-    run_spark_mllib()
-    store_in_mongodb()
     web_analytics()
     
     LOGGER.info("=" * 60)

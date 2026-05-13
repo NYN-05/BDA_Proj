@@ -1,26 +1,19 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useEffect } from "react";
 
 const API_BASE = "http://localhost:8000";
 
 interface Prediction {
-  predicted_kwh: number;
-  month_start: string;
+  predicted_power: number;
+  avg_power: number;
+  date_hour: string;
+  model: string;
+  source: string;
+  generated_at: string;
+  id: string | null;
+  mae: number | null;
+  rmse: number | null;
+  r2: number | null;
 }
-
-interface MonthlyPoint {
-  month: string;
-  actual: number;
-  predicted: number;
-}
-
-interface Backtest {
-  mae: number;
-  rmse: number;
-  r2: number;
-  monthly: MonthlyPoint[];
-}
-
-function LineGraph({ data }: { data: MonthlyPoint[] }) { return null; }
 
 function StatCard({ label, value }: { label: string; value: string }) {
   return (
@@ -32,50 +25,72 @@ function StatCard({ label, value }: { label: string; value: string }) {
 }
 
 export default function App() {
-  const [file, setFile] = useState<File | null>(null);
-  const [dragOver, setDragOver] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [prediction, setPrediction] = useState<Prediction | null>(null);
-  const [backtest, setBacktest] = useState<Backtest | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
 
-  const handleFile = async (f: File) => {
-    setFile(f);
+  const loadPrediction = async () => {
     setError(null);
-    setPrediction(null);
-    setBacktest(null);
     setLoading(true);
 
     try {
-      const formData = new FormData();
-      formData.append("file", f);
-
-      const [predRes, btRes] = await Promise.all([
-        fetch(`${API_BASE}/predict`, { method: "POST", body: formData }),
-        fetch(`${API_BASE}/backtest`, { method: "POST", body: formData }),
-      ]);
-
+      const predRes = await fetch(`${API_BASE}/predictions/latest`);
       if (!predRes.ok) {
         const err = await predRes.json().catch(() => ({ detail: "Unknown error" }));
         throw new Error(err.detail || `HTTP ${predRes.status}`);
       }
-
       setPrediction(await predRes.json());
-      if (btRes.ok) setBacktest(await btRes.json());
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Upload failed");
+      setError(e instanceof Error ? e.message : "Request failed");
     } finally {
       setLoading(false);
     }
   };
 
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setDragOver(false);
-    const f = e.dataTransfer.files[0];
-    if (f) handleFile(f);
+  const handleFileUpload = async (file: File) => {
+    setUploadError(null);
+    setUploadSuccess(null);
+    setUploading(true);
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+      const uploadRes = await fetch(`${API_BASE}/upload`, {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!uploadRes.ok) {
+        const err = await uploadRes.json().catch(() => ({ message: "Unknown error" }));
+        throw new Error(err.message || `HTTP ${uploadRes.status}`);
+      }
+
+      const result = await uploadRes.json();
+      
+      if (result.success) {
+        setUploadSuccess(result.message);
+        // Clear any previous error
+        setError(null);
+        // Load the new prediction
+        await loadPrediction();
+      } else {
+        setUploadError(result.message || "Upload failed");
+      }
+    } catch (e: unknown) {
+      setUploadError(e instanceof Error ? e.message : "Upload failed");
+    } finally {
+      setUploading(false);
+    }
   };
+
+  // Remove automatic loading on mount - now we wait for user upload
+  // useEffect(() => {
+  //   loadPrediction();
+  // }, []);
 
   return (
     <div className="min-h-screen bg-[#070710] text-white font-light">
@@ -93,7 +108,9 @@ export default function App() {
             </div>
           </div>
             <div className="text-right">
-              <p className="text-[10px] text-white/30 uppercase tracking-widest">XGBoost Model</p>
+              <p className="text-[10px] text-white/30 uppercase tracking-widest">
+                {prediction?.model ? `${prediction.model} model` : "Model"}
+              </p>
               <p className="text-[10px] text-white/30">v1.0</p>
             </div>
         </header>
@@ -101,54 +118,66 @@ export default function App() {
         {!prediction ? (
           <section className="min-h-[60vh] flex flex-col justify-center">
             <div className="mb-8">
-              <h2 className="text-3xl font-extralight tracking-tight mb-2">Upload Dataset</h2>
+              <h2 className="text-3xl font-extralight tracking-tight mb-2">Upload Energy Data</h2>
               <p className="text-sm text-white/40 font-light">
-                Drop your household power consumption file or browse to upload.
+                Upload a CSV or TXT file containing historical energy consumption data to generate predictions
               </p>
             </div>
-
-            <div
-              className={[
-                "border border-dashed rounded-xl transition-all duration-300 cursor-pointer group",
-                dragOver
-                  ? "border-white bg-white/5"
-                  : "border-white/10 hover:border-white/30 bg-white/[0.02] hover:bg-white/[0.04]",
-              ].join(" ")}
-              onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-              onDragLeave={() => setDragOver(false)}
-              onDrop={handleDrop}
-              onClick={() => inputRef.current?.click()}
-            >
-              <input
-                ref={inputRef}
-                type="file"
-                accept=".txt,.csv"
-                className="hidden"
-                onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }}
-              />
-              <div className="py-20 flex flex-col items-center gap-5 pointer-events-none">
-                {loading ? (
-                  <div className="flex flex-col items-center gap-4">
-                    <div className="w-10 h-10 border border-white/10 border-t-white/60 rounded-full animate-spin" />
-                    <span className="text-sm text-white/40 animate-pulse font-light tracking-wide">
-                      Processing data&hellip;
-                    </span>
-                  </div>
-                ) : (
-                  <>
-                    <div className="w-14 h-14 rounded-full border border-white/10 flex items-center justify-center group-hover:border-white/20 transition-colors">
-                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
-                        <polyline points="17 8 12 3 7 8" />
-                        <line x1="12" y1="3" x2="12" y2="15" />
+            <div className="border border-dashed rounded-xl border-white/10 bg-white/[0.02]">
+              <div className="py-16 flex flex-col items-center gap-5">
+                <div className="flex flex-col items-center gap-4">
+                  {/* File Upload Area */}
+                  <div className="flex flex-col items-center gap-3 w-full max-w-xl">
+                    <label className="cursor-pointer flex flex-col items-center justify-center w-full border-2 border-dashed border-white/20 rounded-lg p-6 hover:border-white/30 transition-all duration-200">
+                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mb-3 h-6 w-6 text-white/60">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                        <polyline points="7 10 12 15 17 10"/>
+                        <line x1="12" y1="15" x2="12" y2="3"/>
                       </svg>
+                      <div className="flex flex-col items-center gap-1">
+                        <p className="text-sm font-medium text-white/80">Drag & drop files here</p>
+                        <p className="text-xs text-white/40">or click to select file</p>
+                        <input
+                          type="file"
+                          accept=".csv,.txt"
+                          className="hidden"
+                          onChange={(e) => {
+                            if (e.target.files && e.target.files[0]) {
+                              handleFileUpload(e.target.files[0]);
+                            }
+                          }}
+                        />
+                      </div>
+                    </label>
+                    
+                    {/* File Format Info */}
+                    <div className="text-xs text-white/40 text-center">
+                      <p>Supported formats: CSV or TXT files</p>
+                      <p className="mt-1">Expected columns: Date, Time, Global_active_power, Global_reactive_power, Voltage, Global_intensity, Sub_metering_1, Sub_metering_2, Sub_metering_3</p>
                     </div>
-                    <div className="text-center">
-                      <p className="text-sm text-white/60 font-light">Drop file here or click to browse</p>
-                      <p className="text-xs text-white/25 font-light mt-1">Supports .txt and .csv formats</p>
+                  </div>
+                  
+                  {uploadError && (
+                    <div className="mt-4 px-4 py-3 rounded-lg bg-red-500/10 border border-red-500/20 w-full max-w-xl text-left">
+                      <p className="text-sm text-red-400 font-light">{uploadError}</p>
                     </div>
-                  </>
-                )}
+                  )}
+                  
+                  {uploadSuccess && (
+                    <div className="mt-4 px-4 py-3 rounded-lg bg-green-500/10 border border-green-500/20 w-full max-w-xl text-left">
+                      <p className="text-sm text-green-400 font-light">{uploadSuccess}</p>
+                    </div>
+                  )}
+                  
+                  {uploading && (
+                    <div className="flex flex-col items-center gap-4">
+                      <div className="w-10 h-10 border border-white/10 border-t-white/60 rounded-full animate-spin" />
+                      <span className="text-sm text-white/40 animate-pulse font-light tracking-wide">
+                        Processing file&hellip;
+                      </span>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 
@@ -170,10 +199,10 @@ export default function App() {
                 </div>
                 <div>
                   <p className="text-7xl font-extralight tracking-tighter text-white leading-none">
-                    {prediction.predicted_kwh.toLocaleString()}
+                    {prediction.predicted_power.toLocaleString()}
                   </p>
                   <p className="text-sm text-white/40 font-light mt-3">
-                    kWh &nbsp;&middot;&nbsp; Month of {prediction.month_start}
+                    kW &nbsp;&middot;&nbsp; Hour of {prediction.date_hour}
                   </p>
                 </div>
               </div>
@@ -186,75 +215,38 @@ export default function App() {
                   </span>
                 </div>
                 <div className="grid grid-cols-3 gap-6">
-                  <StatCard label="MAE" value={backtest?.mae.toFixed(2) ?? "—"} />
-                  <StatCard label="RMSE" value={backtest?.rmse.toFixed(2) ?? "—"} />
-                  <StatCard label="R²" value={backtest?.r2.toFixed(4) ?? "—"} />
+                  <StatCard label="MAE" value={prediction.mae !== null ? prediction.mae.toFixed(2) : "—"} />
+                  <StatCard label="RMSE" value={prediction.rmse !== null ? prediction.rmse.toFixed(2) : "—"} />
+                  <StatCard label="R²" value={prediction.r2 !== null ? prediction.r2.toFixed(2) : "—"} />
                 </div>
               </div>
             </div>
 
-            {backtest && backtest.monthly.length > 0 && (
-              <div className="p-8 rounded-2xl bg-white/[0.03] border border-white/[0.06]">
-                <p className="text-[11px] text-white/40 uppercase tracking-[0.2em] mb-6">
-                  Monthly Breakdown &mdash; Last {Math.min(12, backtest.monthly.length)} Months
-                </p>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm font-light">
-                    <thead>
-                      <tr className="border-b border-white/[0.06]">
-                        <th className="text-left text-[10px] text-white/30 uppercase tracking-widest pb-3 font-normal">Month</th>
-                        <th className="text-right text-[10px] text-white/30 uppercase tracking-widest pb-3 font-normal">Actual (kWh)</th>
-                        <th className="text-right text-[10px] text-white/30 uppercase tracking-widest pb-3 font-normal">Predicted</th>
-                        <th className="text-right text-[10px] text-white/30 uppercase tracking-widest pb-3 font-normal">Variance</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {backtest.monthly.slice(-12).map((d, i) => {
-                        const variance = d.actual - d.predicted;
-                        const pct = ((variance / d.actual) * 100).toFixed(1);
-                        return (
-                          <tr key={i} className="border-b border-white/[0.04] last:border-0">
-                            <td className="py-2.5 text-white/60">{d.month.slice(0, 7)}</td>
-                            <td className="py-2.5 text-right text-white">{d.actual.toFixed(4)}</td>
-                            <td className="py-2.5 text-right text-white/50">{d.predicted.toFixed(4)}</td>
-                            <td className={`py-2.5 text-right ${variance >= 0 ? "text-lime-400/70" : "text-red-400/70"}`}>
-                              {variance >= 0 ? "+" : ""}{variance.toFixed(4)} ({pct}%)
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+                  <polyline points="14 2 14 8 20 8" />
+                </svg>
+                <div>
+                  <p className="text-sm text-white/60 font-light">Spark MLlib Forecast</p>
+                  <p className="text-xs text-white/30 font-light">Source: {prediction.source}</p>
                 </div>
               </div>
-            )}
-
-            {file && (
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
-                    <polyline points="14 2 14 8 20 8" />
-                  </svg>
-                  <div>
-                    <p className="text-sm text-white/60 font-light">{file.name}</p>
-                    <p className="text-xs text-white/30 font-light">{(file.size / 1024).toFixed(1)} KB</p>
-                  </div>
-                </div>
-                <button
-                  onClick={() => { setPrediction(null); setBacktest(null); setFile(null); setError(null); }}
-                  className="text-sm text-white/40 hover:text-white font-light border border-white/10 hover:border-white/30 px-5 py-2 rounded-lg transition-all duration-200"
-                >
-                  Upload New File
-                </button>
-              </div>
-            )}
+              <button
+                onClick={loadPrediction}
+                className="text-sm text-white/40 hover:text-white font-light border border-white/10 hover:border-white/30 px-5 py-2 rounded-lg transition-all duration-200"
+                disabled={uploading}
+              >
+                {uploading ? "Processing..." : "Refresh Forecast"}
+              </button>
+            </div>
           </section>
         )}
 
         <footer className="mt-24 pt-8 border-t border-white/[0.05] flex items-center justify-between">
           <p className="text-[11px] text-white/20 font-light">
-            Built with scikit-learn &middot; FastAPI &middot; React
+            Built with Spark MLlib &middot; FastAPI &middot; React
           </p>
           <p className="text-[11px] text-white/20 font-light">Big Data Analytics Project</p>
         </footer>

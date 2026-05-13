@@ -5,10 +5,9 @@ A complete, beginner-friendly Big Data + Machine Learning pipeline that processe
 ## Project Overview
 This project demonstrates:
 - Distributed storage and preprocessing using Hadoop HDFS and MapReduce
-- Data cleaning, feature engineering, and normalization
-- ML model training (Linear Regression, Random Forest)
-- Evaluation metrics (MAE, MSE, RMSE, R2)
-- Prediction generation and visualization
+- Time-series forecasting using Spark MLlib
+- Prediction storage in MongoDB (local)
+- Visualization and reporting
 
 ## Architecture
 ```
@@ -38,18 +37,12 @@ energy-consumption-prediction/
 │
 ├── preprocessing/
 │   ├── clean_data.py
-│   ├── feature_engineering.py
-│   └── preprocess_pipeline.py
+│   └── feature_engineering.py
 │
 ├── ml/
-│   ├── train_linear_regression.py
-│   ├── train_random_forest.py
-│   ├── evaluate_model.py
-│   ├── predict.py
 │   └── saved_models/
 │
 ├── visualization/
-│   ├── visualization.py
 │   └── charts/
 │
 
@@ -96,7 +89,7 @@ pip install -r requirements.txt
 
 ## Running the Project
 
-### 1) Preprocess + Train + Predict + Visualize
+### 1) Run Spark MLlib Forecast (after MapReduce)
 ```bat
 python main.py
 ```
@@ -109,14 +102,15 @@ run_mapreduce.bat
 ```
 MapReduce output is saved to output/mapreduce_hourly_avg.csv.
 
-### 3) Train Models Separately
+### 3) Store Spark Predictions in MongoDB
 ```bat
-python preprocessing\preprocess_pipeline.py
-python ml\train_linear_regression.py
-python ml\train_random_forest.py
-python ml\evaluate_model.py
-python ml\predict.py
-python visualization\visualization.py
+python scripts\store_spark_predictions.py
+```
+
+### 4) Hive Trend Analysis (Optional)
+Hive runs inside the Hadoop docker stack if the hive-server container is available.
+```bat
+docker exec -i hive-server hive -f /workspace/hadoop/hive_trend_analysis.hql
 ```
 
 ### 4) running the server-backend & fronted:
@@ -135,6 +129,22 @@ python -m http.server 3000
 Then open http://localhost:3000
 ```
 
+## Local MongoDB (no Docker)
+This project expects MongoDB to be installed locally and running on:
+
+```
+mongodb://localhost:27017/
+```
+
+The API will store predictions in the `energy_predictions.predictions` collection.
+You can override the connection with environment variables:
+
+```
+MONGODB_URI=mongodb://localhost:27017/
+MONGODB_DB=energy_predictions
+MONGODB_COLLECTION=predictions
+```
+
 
 ## Outputs
 - output/processed_monthly.csv
@@ -142,16 +152,42 @@ Then open http://localhost:3000
 - output/metrics.txt
 - visualization/charts/*.png
 
+## Prediction Schema
+All Spark predictions follow a single schema across CSV, MongoDB, and API responses:
+
+```json
+{
+	"schema_version": "1.0",
+	"date_hour": "YYYY-MM-DD HH",
+	"avg_power": 1.2345,
+	"predicted_power": 1.3456,
+	"model": "spark_mllib",
+	"source": "spark_local",
+	"generated_at": "YYYY-MM-DDTHH:MM:SSZ"
+}
+```
+
+## API Endpoints
+- `GET /db/health`: MongoDB connectivity check
+- `GET /predictions/latest`: latest stored prediction
+- `POST /predict`: store latest Spark forecast and return it
+
 ## Screenshots (Placeholders)
 - dashboard screenshot
 - prediction charts
 - MapReduce output
 
 ## Troubleshooting
-- If `docker compose up -d` fails, ensure Docker Desktop is running.
 - If MapReduce fails, re-run `hadoop\docker_install_python.bat`.
 - If scripts fail in PowerShell, try CMD.
 - Ensure dataset file is at dataset/household_power_consumption.txt.
+
+## Validation
+To validate prediction consistency and MongoDB storage:
+
+```bat
+python scripts\validate_prediction_consistency.py
+```
 
 ## License
 Use for academic and demonstration purposes.

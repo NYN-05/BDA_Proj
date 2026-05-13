@@ -7,7 +7,8 @@ A Big Data Analytics project for predicting energy consumption using Hadoop and 
 This project implements a complete Big Data pipeline for analyzing and predicting household energy consumption using:
 - **Hadoop HDFS** for distributed storage
 - **MapReduce** for parallel data processing
-- **Machine Learning** (Linear Regression, Random Forest) for prediction
+- **Spark MLlib** for forecasting
+- **MongoDB** for prediction storage
 - **Visualization** for results presentation
 
 ## Repository Structure
@@ -20,14 +21,13 @@ BDA_PROJ/
 ├── energy-consumption-prediction/
 │   ├── dataset/              # Raw dataset (UCI Individual Household Electric Power Consumption)
 │   ├── hadoop/               # Hadoop MapReduce scripts
-│   ├── preprocessing/        # Data cleaning and feature engineering
-│   ├── ml/                   # Machine learning models
-│   ├── visualization/        # Data visualization scripts
+│   ├── preprocessing/        # Data cleaning helpers
+│   ├── ml/                   # Spark model artifacts (optional)
+│   ├── visualization/        # Charts output (optional)
 │   ├── notebooks/            # Jupyter notebooks
 │   ├── output/               # Processed data and predictions
 │   ├── requirements.txt      # Python dependencies
 │   ├── main.py               # Main execution script
-│   ├── docker-compose.yml    # Docker Hadoop setup
 │   └── README.md             # Detailed project README
 │
 └── venv/                     # Python virtual environment (not tracked in git)
@@ -38,6 +38,7 @@ BDA_PROJ/
 ### Prerequisites
 - Python 3.8+
 - Docker Desktop (for Hadoop)
+- MongoDB (local instance)
 - Git
 
 ### Setup
@@ -64,26 +65,15 @@ docker compose up -d
 
 ### Running the Project
 
-Run the complete pipeline:
+Run the Spark MLlib forecast (after MapReduce output exists):
 The large dataset file was excluded from the repo. To use the project, download the dataset from https://archive.ics.uci.edu/ml/datasets/
 ```bash
 python energy-consumption-prediction/main.py
 ```
 
-Or run individual components:
+Store the latest Spark forecast in MongoDB:
 ```bash
-# Preprocessing
-python energy-consumption-prediction/preprocessing/preprocess_pipeline.py
-
-# Train models
-python energy-consumption-prediction/ml/train_linear_regression.py
-python energy-consumption-prediction/ml/train_random_forest.py
-
-# Evaluate
-python energy-consumption-prediction/ml/evaluate_model.py
-
-# Visualize
-python energy-consumption-prediction/visualization/visualization.py
+python energy-consumption-prediction/scripts/store_spark_predictions.py
 ```
 
 ## Documentation
@@ -94,10 +84,10 @@ python energy-consumption-prediction/visualization/visualization.py
 ## Technologies Used
 
 - **Big Data**: Hadoop HDFS, MapReduce, Spark
-- **Machine Learning**: scikit-learn, pandas, numpy
+- **Machine Learning**: Spark MLlib, pandas, numpy
 - **Visualization**: matplotlib, seaborn, plotly
 - **Dashboard**: Streamlit
-- **Containerization**: Docker
+- **Database**: MongoDB (local)
 
 ## License
 

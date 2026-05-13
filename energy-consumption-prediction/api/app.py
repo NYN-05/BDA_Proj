@@ -1,9 +1,8 @@
+import os
 import sys
-import joblib
-import numpy as np
-import pandas as pd
 from pathlib import Path
-from fastapi import FastAPI, UploadFile, File, HTTPException
+
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -21,94 +20,60 @@ app.add_middleware(
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-MODEL_PATH = PROJECT_ROOT / "ml" / "saved_models" / "xgb_model.joblib"
-SCALER_Y_PATH = PROJECT_ROOT / "ml" / "saved_models" / "xgb_scaler.gz"
-METRICS_PATH = PROJECT_ROOT / "output" / "metrics.txt"
 CHARTS_DIR = PROJECT_ROOT / "visualization" / "charts"
+OUTPUT_DIR = PROJECT_ROOT / "output"
 
-from preprocessing.clean_data import RAW_COLUMNS
-from preprocessing.feature_engineering import build_monthly_series
+MONGO_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017/")
+MONGO_DB = os.getenv("MONGODB_DB", "energy_predictions")
+MONGO_COLLECTION = os.getenv("MONGODB_COLLECTION", "predictions")
 
-
-def create_sequences(data, seq_len=6):
-    X, y = [], []
-    for i in range(len(data) - seq_len):
-        X.append(data[i : i + seq_len])
-        y.append(data[i + seq_len])
-    return np.array(X), np.array(y)
-
-
-def load_model():
-    if not MODEL_PATH.exists():
-        raise FileNotFoundError("Model not found. Run `python ml/train_xgb.py` first.")
-    return joblib.load(MODEL_PATH)
-
-
-def load_scaler():
-    if not SCALER_Y_PATH.exists():
-        raise FileNotFoundError("Scaler not found. Run `python ml/train_xgb.py` first.")
-    return joblib.load(SCALER_Y_PATH)
-
-
-def parse_upload(raw_bytes: bytes) -> pd.DataFrame:
-    import csv
-    text = raw_bytes.decode("utf-8", errors="replace")
-    lines = text.strip().split("\n")
-    if not lines:
-        raise ValueError("Empty file")
-    has_semicolon = ";" in lines[0]
-    sep = ";" if has_semicolon else ","
-    reader = csv.DictReader(lines, delimiter=sep)
-    rows = [{k.strip(): v.strip() for k, v in row.items()} for row in reader]
-    df = pd.DataFrame(rows)
-    for col in RAW_COLUMNS:
-        if col not in df.columns:
-            raise ValueError(f"Missing required column: {col}")
-    return df
+from services.spark_predictions import get_latest_prediction, store_prediction
+from services.file_processor import process_uploaded_file, ProcessingResult
 
 
 class PredictionResponse(BaseModel):
-    predicted_kwh: float
-    month_start: str
-    metrics: dict | None
+    id: str | None
+    schema_version: str
+    date_hour: str
+    avg_power: float
+    predicted_power: float
+    model: str
+    source: str
+    generated_at: str
 
 
-class BacktestResponse(BaseModel):
-    mae: float
-    mse: float
-    rmse: float
-    r2: float
-    monthly: list[dict]
-
-
-def build_monthly(df: pd.DataFrame) -> pd.Series:
-    df = df.copy()
-    df["Datetime"] = pd.to_datetime(df["Date"] + " " + df["Time"], dayfirst=True, errors="coerce")
-    df = df[df["Datetime"].notna()]
-    for col in ["Global_active_power", "Global_reactive_power", "Voltage", "Global_intensity",
-                "Sub_metering_1", "Sub_metering_2", "Sub_metering_3"]:
-        df[col] = pd.to_numeric(df[col].replace("?", pd.NA), errors="coerce")
-    df = df.dropna(subset=["Global_active_power"])
-    monthly = df.groupby(pd.Grouper(key="Datetime", freq="MS"))["Global_active_power"].sum() / 60.0
-    monthly.name = "Monthly_kwh"
-    return monthly
+class UploadResponse(BaseModel):
+    success: bool
+    message: str
+    records_processed: int | None = None
+    prediction: PredictionResponse | None = None
 
 
 @app.get("/")
 def root():
-    return {"status": "ok", "message": "Energy Prediction API"}
+    return {"status": "ok", "message": "Energy Prediction API", "endpoints": ["/upload", "/predict", "/predictions/latest"]}
 
 
-@app.get("/metrics")
-def get_metrics():
-    if not METRICS_PATH.exists():
-        raise HTTPException(status_code=404, detail="Metrics not found.")
-    result = {}
-    for line in METRICS_PATH.read_text(encoding="utf-8").strip().split("\n"):
-        if ":" in line:
-            k, v = line.split(":", 1)
-            result[k.strip()] = float(v.strip())
-    return result
+@app.get("/db/health")
+def db_health():
+    from pymongo import MongoClient
+
+    client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=2000)
+    try:
+        client.admin.command("ping")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"MongoDB ping failed: {exc}")
+    finally:
+        client.close()
+    return {"status": "ok"}
+
+
+@app.get("/predictions/latest")
+def latest_prediction_endpoint():
+    doc = get_latest_prediction(MONGO_URI, MONGO_DB, MONGO_COLLECTION)
+    if not doc:
+        raise HTTPException(status_code=404, detail="No predictions found. Upload a file first.")
+    return doc
 
 
 @app.get("/charts/{name}")
@@ -119,65 +84,92 @@ def get_chart(name: str):
     return FileResponse(path, media_type="image/png")
 
 
+@app.post("/upload", response_model=UploadResponse)
+async def upload_file(file: UploadFile = File(...)) -> UploadResponse:
+    if not file.filename:
+        return UploadResponse(success=False, message="No file provided")
+
+    ext = Path(file.filename).suffix.lower()
+    if ext not in [".csv", ".txt"]:
+        return UploadResponse(
+            success=False,
+            message="Invalid file format. Use .csv or .txt files containing energy consumption data."
+        )
+
+    temp_dir = PROJECT_ROOT / "temp_uploads"
+    temp_dir.mkdir(exist_ok=True)
+
+    temp_path = temp_dir / file.filename
+    try:
+        with open(temp_path, "wb") as f:
+            content = await file.read()
+            f.write(content)
+
+        result: ProcessingResult = process_uploaded_file(
+            temp_path,
+            OUTPUT_DIR,
+            MONGO_URI,
+            MONGO_DB,
+            MONGO_COLLECTION,
+        )
+
+        if not result.success:
+            return UploadResponse(success=False, message=result.message)
+
+        if result.prediction:
+            from services.spark_predictions import SparkPredictionRecord
+            record = SparkPredictionRecord(
+                date_hour=result.prediction["date_hour"],
+                avg_power=result.prediction["avg_power"],
+                predicted_power=result.prediction["predicted_power"],
+                model="spark_mllib_linear_regression",
+                source="upload_file",
+                generated_at=result.prediction.get("generated_at", ""),
+                mae=result.prediction.get("mae"),
+                rmse=result.prediction.get("rmse"),
+                r2=result.prediction.get("r2"),
+            )
+            inserted_id = store_prediction(record, MONGO_URI, MONGO_DB, MONGO_COLLECTION)
+
+            return UploadResponse(
+                success=True,
+                message=f"Successfully processed {result.records_processed} records",
+                records_processed=result.records_processed,
+                prediction=PredictionResponse(
+                    id=inserted_id,
+                    schema_version="1.0",
+                    date_hour=result.prediction["date_hour"],
+                    avg_power=result.prediction["avg_power"],
+                    predicted_power=result.prediction["predicted_power"],
+                    model="spark_mllib_linear_regression",
+                    source="upload_file",
+                    generated_at=record.generated_at,
+                ),
+            )
+
+        return UploadResponse(success=False, message="No prediction generated")
+
+    except Exception as e:
+        return UploadResponse(success=False, message=f"Error processing file: {str(e)}")
+    finally:
+        if temp_path.exists():
+            temp_path.unlink()
+
+
 @app.post("/predict")
-async def predict(file: UploadFile = File(...)) -> PredictionResponse:
-    model = load_model()
-    scaler = load_scaler()
+async def predict() -> PredictionResponse:
+    from services.spark_predictions import latest_prediction as spark_latest_prediction
 
-    contents = await file.read()
-    df = parse_upload(contents)
-    monthly = build_monthly(df)
+    spark_csv = OUTPUT_DIR / "spark_predictions.csv"
+    if not spark_csv.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="No predictions available. Please upload a file first using /upload endpoint."
+        )
 
-    if len(monthly) < 7:
-        raise HTTPException(status_code=400, detail="Need at least 7 months of data.")
+    record = spark_latest_prediction(spark_csv)
+    inserted_id = store_prediction(record, MONGO_URI, MONGO_DB, MONGO_COLLECTION)
 
-    y_raw = monthly.values
-    y_scaled = scaler.transform(y_raw.reshape(-1, 1)).flatten()
-
-    X_seq, _ = create_sequences(y_scaled, seq_len=6)
-    last_seq = y_scaled[-6:].reshape(1, -1)
-    pred_scaled = model.predict(last_seq)[0]
-    pred = float(scaler.inverse_transform([[pred_scaled]])[0, 0])
-
-    next_month = (monthly.index[-1] + pd.offsets.MonthBegin(1)).strftime("%Y-%m-%d")
-
-    return PredictionResponse(
-        predicted_kwh=round(pred, 6),
-        month_start=next_month,
-        metrics=None,
-    )
-
-
-@app.post("/backtest")
-async def backtest(file: UploadFile = File(...)) -> BacktestResponse:
-    model = load_model()
-    scaler = load_scaler()
-
-    contents = await file.read()
-    df = parse_upload(contents)
-    monthly = build_monthly(df)
-
-    if len(monthly) < 7:
-        raise HTTPException(status_code=400, detail="Need at least 7 months of data.")
-
-    y_raw = monthly.values
-    y_scaled = scaler.transform(y_raw.reshape(-1, 1)).flatten()
-
-    X_seq, y_seq = create_sequences(y_scaled, seq_len=6)
-    preds_scaled = model.predict(X_seq)
-    preds = scaler.inverse_transform(preds_scaled.reshape(-1, 1)).flatten()
-    y_vals = scaler.inverse_transform(y_seq.reshape(-1, 1)).flatten()
-
-    mae = float(np.mean(np.abs(y_vals - preds)))
-    mse = float(np.mean((y_vals - preds) ** 2))
-    rmse = float(np.sqrt(mse))
-    ss_res = float(np.sum((y_vals - preds) ** 2))
-    ss_tot = float(np.sum((y_vals - y_vals.mean()) ** 2))
-    r2 = float(1 - ss_res / ss_tot) if ss_tot != 0 else 0.0
-
-    monthly_list = [
-        {"month": str(monthly.index[i + 6]), "actual": round(float(y_vals[i]), 6), "predicted": round(float(preds[i]), 6)}
-        for i in range(len(preds))
-    ]
-
-    return BacktestResponse(mae=round(mae, 6), mse=round(mse, 6), rmse=round(rmse, 6), r2=round(r2, 4), monthly=monthly_list)
+    payload = record.as_dict()
+    payload["id"] = inserted_id
+    return PredictionResponse(**payload)

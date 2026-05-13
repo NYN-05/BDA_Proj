@@ -42,13 +42,13 @@ BDA_PROJ/
 │   ├── dataset/                           # Raw dataset (not tracked)
 │   ├── hadoop/                            # MapReduce scripts and Docker helpers
 │   ├── ml/                                # Training, evaluation, prediction
-│   ├── mongo_data/                        # MongoDB Docker volume data
+│   ├── mongo_data/                        # Local MongoDB data (ignored)
 │   ├── notebooks/                         # Experiments
 │   ├── output/                            # Processed data and predictions
 │   ├── preprocessing/                     # Cleaning and feature engineering
 │   ├── ui/                                # Static HTML UI (Vite assets present)
 │   ├── visualization/                     # Charts and visualization scripts
-│   ├── docker-compose.yml                 # Docker services (Mongo)
+│   ├── hadoop/                            # Hadoop MapReduce scripts
 │   ├── main.py                            # End-to-end pipeline runner
 │   └── requirements.txt                   # Python dependencies
 ├── Images/                                # Output images (if any)
@@ -63,9 +63,9 @@ BDA_PROJ/
 - sample_copy.csv, sample.txt: Sample files.
 
 ### energy-consumption-prediction/
-- main.py: Runs preprocessing, training, evaluation, prediction, and visualization.
+- main.py: Runs Spark MLlib forecasting from MapReduce output.
 - requirements.txt: Python dependencies for the pipeline.
-- docker-compose.yml: Runs MongoDB service for storage.
+- Local MongoDB is used for prediction storage.
 - api/app.py: FastAPI backend for serving predictions.
 - dataset/household_power_consumption.txt: Raw dataset (download separately).
 - hadoop/mapper.py, hadoop/reducer.py: MapReduce streaming logic.
@@ -74,15 +74,9 @@ BDA_PROJ/
 - hadoop/fetch_output.bat: Pulls MapReduce output to local CSV.
 - preprocessing/clean_data.py: Cleans raw dataset.
 - preprocessing/feature_engineering.py: Generates time-series features.
-- preprocessing/preprocess_pipeline.py: Orchestrates preprocessing.
-- ml/train_linear_regression.py: Baseline model training.
-- ml/train_random_forest.py: Ensemble model training.
-- ml/train_xgb.py: XGBoost training (if installed).
-- ml/train_lstm.py: LSTM training (if installed).
-- ml/evaluate_model.py: Metrics evaluation.
-- ml/predict.py: Generates predictions.
-- ml/saved_models/: Persisted models and scalers.
-- visualization/visualization.py: Generates charts from outputs.
+- preprocessing/clean_data.py: Cleans raw dataset.
+- ml/saved_models/: Placeholder for Spark model artifacts (optional).
+- visualization/charts/: Optional charts output.
 - output/: CSVs, metrics, and prediction results.
 - ui/index.html: Static UI entry point.
 - ui/src/: React/Vite UI source.
@@ -120,14 +114,9 @@ cd energy-consumption-prediction
 python main.py
 ```
 
-### Run ML Steps Individually
+### Run Spark MLlib Forecast
 ```bat
-python preprocessing\preprocess_pipeline.py
-python ml\train_linear_regression.py
-python ml\train_random_forest.py
-python ml\evaluate_model.py
-python ml\predict.py
-python visualization\visualization.py
+python main.py
 ```
 
 ### Run API and UI
@@ -155,9 +144,24 @@ energy-consumption-prediction\dataset\household_power_consumption.txt
 - output/next_month_prediction.csv
 - visualization/charts/*.png
 
+## Prediction Schema
+Predictions are stored consistently in CSV, MongoDB, and API responses using:
+
+```json
+{
+  "schema_version": "1.0",
+  "date_hour": "YYYY-MM-DD HH",
+  "avg_power": 1.2345,
+  "predicted_power": 1.3456,
+  "model": "spark_mllib",
+  "source": "spark_local",
+  "generated_at": "YYYY-MM-DDTHH:MM:SSZ"
+}
+```
+
 ## Technology Stack
 - Hadoop HDFS, MapReduce (Docker)
 - Python, pandas, numpy, scikit-learn
-- Optional: XGBoost, TensorFlow/Keras
+- Spark MLlib (local)
 - FastAPI backend, static HTML/React UI
-- MongoDB (Docker)
+- MongoDB (local)

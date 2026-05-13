@@ -1,42 +1,59 @@
 import logging
+import subprocess
 from pathlib import Path
-
-from preprocessing.preprocess_pipeline import run_preprocessing
-from ml.train_random_forest import train_random_forest
-from ml.evaluate_model import evaluate
-from ml.predict import generate_predictions
-from visualization.visualization import (
-    plot_monthly_usage,
-    plot_feature_importance,
-    plot_correlation_heatmap,
-)
 
 LOGGER = logging.getLogger(__name__)
 
 
-def main():
+def run_mapreduce() -> None:
+    """Run MapReduce processing to generate hourly averages"""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     root = Path(__file__).resolve().parent
+    
+    # Run the MapReduce processor
+    mapreduce_script = root / "hadoop_runner.py"
+    result = subprocess.run(
+        ["python", str(mapreduce_script)],
+        cwd=str(root),
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError("MapReduce processing failed.")
+    
+    LOGGER.info("MapReduce processing completed successfully")
 
-    dataset_path = root / "dataset" / "household_power_consumption.txt"
-    processed_path = root / "output" / "processed_monthly.csv"
-    scaler_path = root / "ml" / "saved_models" / "scaler.joblib"
-    model_path = root / "ml" / "saved_models" / "random_forest.joblib"
-    metrics_path = root / "output" / "metrics.txt"
-    predictions_path = root / "output" / "next_month_prediction.csv"
-    charts_dir = root / "visualization" / "charts"
 
-    run_preprocessing(dataset_path, processed_path, scaler_path)
-    train_random_forest(processed_path, model_path)
-    evaluate(model_path, processed_path, metrics_path)
-    generate_predictions(model_path, scaler_path, dataset_path, predictions_path)
+def run_spark_forecast() -> None:
+    """Run Spark MLlib forecasting on processed data"""
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    root = Path(__file__).resolve().parent
+    mapreduce_output = root / "output" / "mapreduce_hourly_avg.csv"
 
-    charts_dir.mkdir(parents=True, exist_ok=True)
-    plot_monthly_usage(processed_path, charts_dir)
-    plot_feature_importance(model_path, processed_path, charts_dir)
-    plot_correlation_heatmap(processed_path, charts_dir)
+    if not mapreduce_output.exists():
+        raise FileNotFoundError(
+            "MapReduce output not found. Run MapReduce processing first."
+        )
 
-    LOGGER.info("Pipeline completed successfully")
+    spark_script = root / "hadoop" / "spark_forecast_local.py"
+    result = subprocess.run(
+        ["python", str(spark_script)],
+        cwd=str(root),
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError("Spark MLlib forecasting failed.")
+
+    LOGGER.info("Spark MLlib forecasting completed successfully")
+
+
+def main() -> None:
+    """Main function - can be called to run both MapReduce and Spark forecasting"""
+    try:
+        run_mapreduce()
+        run_spark_forecast()
+    except Exception as e:
+        LOGGER.error(f"Error in processing pipeline: {e}")
+        raise
 
 
 if __name__ == "__main__":
