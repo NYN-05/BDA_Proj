@@ -191,6 +191,14 @@ def store_prediction_in_mongo(
         "source": "upload_file",
         "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
     }
+    
+    # Add optional metrics if they exist in the prediction
+    if "mae" in prediction and prediction["mae"] is not None:
+        record["mae"] = prediction["mae"]
+    if "rmse" in prediction and prediction["rmse"] is not None:
+        record["rmse"] = prediction["rmse"]
+    if "r2" in prediction and prediction["r2"] is not None:
+        record["r2"] = prediction["r2"]
 
     result = db[collection].insert_one(record)
     client.close()

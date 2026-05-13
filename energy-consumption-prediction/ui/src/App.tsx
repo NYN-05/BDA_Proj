@@ -215,9 +215,9 @@ export default function App() {
                   </span>
                 </div>
                 <div className="grid grid-cols-3 gap-6">
-                  <StatCard label="MAE" value={prediction.mae !== null ? prediction.mae.toFixed(2) : "—"} />
-                  <StatCard label="RMSE" value={prediction.rmse !== null ? prediction.rmse.toFixed(2) : "—"} />
-                  <StatCard label="R²" value={prediction.r2 !== null ? prediction.r2.toFixed(2) : "—"} />
+                  <StatCard label="MAE" value={typeof prediction.mae === 'number' ? prediction.mae.toFixed(2) : "—"} />
+                  <StatCard label="RMSE" value={typeof prediction.rmse === 'number' ? prediction.rmse.toFixed(2) : "—"} />
+                  <StatCard label="R²" value={typeof prediction.r2 === 'number' ? prediction.r2.toFixed(2) : "—"} />
                 </div>
               </div>
             </div>
